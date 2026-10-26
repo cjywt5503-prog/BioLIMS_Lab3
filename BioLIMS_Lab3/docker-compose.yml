@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # 1. Service Discovery (Реестр сервисов Consul)
+  consul:
+    image: hashicorp/consul:1.15
+    container_name: biolims-consul
+    ports:
+      - "8500:8500"
+    command: "agent -server -bootstrap-expect=1 -ui -client=0.0.0.0"
+    networks:
+      - biolims-net
+
+  # 2. Message Broker (Брокер сообщений RabbitMQ с веб-панелью)
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: biolims-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - biolims-net
+
+  # 3. Контекст регистрации и отбора биоматериала (Intake Context)
+  order-sample-service:
+    build: ./order-sample-service
+    restart: always
+    expose:
+      - "8001"
+    environment:
+      - SERVICE_NAME=order-sample-service
+      - SERVICE_PORT=8001
+      - CONSUL_HOST=consul
+      - RABBITMQ_HOST=rabbitmq
+    depends_on:
+      - consul
+      - rabbitmq
+    networks:
+      - biolims-net
+
+  # 4. Контекст лабораторного тестирования (Assay Execution Context)
+  assay-execution-service:
+    build: ./assay-execution-service
+    restart: always
+    expose:
+      - "8002"
+    environment:
+      - SERVICE_NAME=assay-execution-service
+      - SERVICE_PORT=8002
+      - CONSUL_HOST=consul
+      - RABBITMQ_HOST=rabbitmq
+      - ORDER_SERVICE_URL=http://order-sample-service:8001
+    depends_on:
+      - consul
+      - rabbitmq
+      - order-sample-service
+    networks:
+      - biolims-net
+
+  # 5. Контекст клинической валидации и отчётности (Validation & Report Context)
+  validation-report-service:
+    build: ./validation-report-service
+    restart: always
+    expose:
+      - "8003"
+    environment:
+      - SERVICE_NAME=validation-report-service
+      - SERVICE_PORT=8003
+      - CONSUL_HOST=consul
+      - RABBITMQ_HOST=rabbitmq
+    depends_on:
+      - consul
+      - rabbitmq
+    networks:
+      - biolims-net
+
+  # 6. Edge / API Gateway (Единая точка входа и балансировщик нагрузки)
+  api-gateway:
+    image: nginx:alpine
+    container_name: biolims-api-gateway
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./api-gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - order-sample-service
+      - assay-execution-service
+      - validation-report-service
+    networks:
+      - biolims-net
+
+networks:
+  biolims-net:
+    driver: bridge
